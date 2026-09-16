@@ -298,11 +298,30 @@ class LocalWhisperTranscriber:
             )
         except Exception as exc:
             if self.runtime.device == "cuda" and self.requested_device == "auto":
-                self.log(f"CUDA startup failed ({exc}). Falling back to CPU int8.")
-                self.runtime = RuntimeChoice("cpu", "int8", f"CUDA initialization failed: {exc}")
-                self.model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
+                self._fallback_to_cpu(f"CUDA initialization failed: {exc}")
             else:
                 raise
+
+    def _fallback_to_cpu(self, reason: str) -> None:
+        from faster_whisper import WhisperModel
+
+        self.log(f"{reason}. Falling back to CPU int8.")
+        self.runtime = RuntimeChoice("cpu", "int8", reason)
+        self.model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
+
+    @staticmethod
+    def _looks_like_cuda_runtime_error(exc: Exception) -> bool:
+        text = str(exc).lower()
+        markers = (
+            "cublas",
+            "cudnn",
+            "cuda",
+            "nvrtc",
+            "library",
+            "dll",
+            "driver version is insufficient",
+        )
+        return any(marker in text for marker in markers)
 
     def transcribe_one(
         self,
@@ -354,21 +373,40 @@ class LocalWhisperTranscriber:
         if self.model_name.startswith("distil-"):
             kwargs["condition_on_previous_text"] = False
 
-        progress(0.05, f"Transcribing {source_path.name}")
-        segments_gen, info_obj = self.model.transcribe(str(source_path), **kwargs)
+        def run_once():
+            progress(0.05, f"Transcribing {source_path.name} on {self.runtime.device}")
+            segments_gen, info_obj = self.model.transcribe(str(source_path), **kwargs)
+            duration = float(getattr(info_obj, "duration", 0.0) or 0.0)
+            collected: list[dict] = []
+            for segment in segments_gen:
+                if cancelled():
+                    raise TranscriptionCancelled(f"Cancelled while processing {source_path.name}")
+                seg = segment_to_dict(segment)
+                collected.append(seg)
+                if duration > 0:
+                    frac = min(0.98, max(0.05, seg["end"] / duration))
+                else:
+                    frac = 0.5
+                progress(frac, f"{source_path.name}: {format_clock(seg['end'])}")
+            return collected, info_obj, duration
 
-        duration = float(getattr(info_obj, "duration", 0.0) or 0.0)
-        segments: list[dict] = []
-        for segment in segments_gen:
-            if cancelled():
-                raise TranscriptionCancelled(f"Cancelled while processing {source_path.name}")
-            seg = segment_to_dict(segment)
-            segments.append(seg)
-            if duration > 0:
-                frac = min(0.98, max(0.05, seg["end"] / duration))
+        try:
+            segments, info_obj, duration = run_once()
+        except Exception as exc:
+            if (
+                self.runtime.device == "cuda"
+                and self.requested_device == "auto"
+                and self._looks_like_cuda_runtime_error(exc)
+            ):
+                self._fallback_to_cpu(f"CUDA runtime failed during transcription: {exc}")
+                progress(0.05, "GPU runtime unavailable; retrying automatically on CPU")
+                segments, info_obj, duration = run_once()
             else:
-                frac = 0.5
-            progress(frac, f"{source_path.name}: {format_clock(seg['end'])}")
+                raise
+
+        settings["device"] = self.runtime.device
+        settings["compute_type"] = self.runtime.compute_type
+        settings["runtime_fallback_reason"] = self.runtime.fallback_reason
 
         info = {
             "language": getattr(info_obj, "language", None),
