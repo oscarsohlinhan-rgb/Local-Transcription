@@ -12,3 +12,6 @@ workspace/*
 *.wav
 *.m4a
 *.flac
+.runtime/
+vendor/*.zip
+vendor/get-pip.py
