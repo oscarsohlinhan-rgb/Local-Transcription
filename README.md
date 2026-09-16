@@ -17,13 +17,15 @@ The app is **fully local at transcription time**. The first time you choose a mo
 
 ## 1. Easiest install
 
-### Windows
+### Windows — one click, no system Python required
 
-1. Install **Python 3.11 or 3.12** from python.org if you do not already have it. During install, enable **Add Python to PATH**.
-2. Download/clone this repository.
-3. Double-click `setup_windows.bat` once.
-4. Double-click `run_windows.bat` whenever you want the app.
-5. Your browser opens to `http://127.0.0.1:7860`.
+1. Download/clone this repository or unzip the reinstall bundle.
+2. Double-click **`run_windows.bat`**.
+3. On the first run, the app prepares its own private Python 3.12.10 runtime under `.runtime/`, installs the transcription/UI dependencies, and installs CUDA 12 cuBLAS + cuDNN 9 automatically when an NVIDIA GPU is detected.
+4. Your browser opens to `http://127.0.0.1:7860`.
+5. Later launches are just the same `run_windows.bat` double-click; there is no separate setup step.
+
+The private Python runtime does not modify your system Python or PATH. If the optional `vendor/python-3.12.10-embed-amd64.zip` and `vendor/get-pip.py` files are bundled, setup uses them directly; otherwise it downloads the official files on first run.
 
 ### macOS / Linux
 
@@ -78,7 +80,7 @@ The browser UI copies selected recordings into a local job workspace. For a very
 
 ```bash
 # Windows after setup
-.venv\Scripts\python.exe cli.py "D:\Lectures\MME3252" --preset balanced --output "D:\Lectures\Transcripts"
+.runtime\python\python.exe cli.py "D:\Lectures\MME3252" --preset balanced --output "D:\Lectures\Transcripts"
 
 # macOS/Linux after setup
 .venv/bin/python cli.py ~/Lectures/MME3252 --preset balanced --output ~/Lectures/Transcripts
@@ -132,15 +134,19 @@ This repo intentionally follows the lecture-ingestion workflow used for technica
 ### First model load seems slow
 The model is downloading once. Later runs reuse the local cache.
 
-### CUDA error
-Leave Compute on **Auto**. If CUDA initialization fails, the app falls back to CPU. If you specifically want GPU acceleration, update/install the CUDA/cuDNN runtime expected by your CTranslate2 version.
+### CUDA / `cublas64_12.dll` error
+Pull the latest version and run `run_windows.bat` again. The one-click bootstrap installs NVIDIA CUDA 12 cuBLAS + cuDNN 9 when an NVIDIA GPU is detected, and `launch.py` registers their DLL folders before CTranslate2 loads. Auto mode also retries on CPU if a lazy CUDA runtime failure still occurs during transcription.
+
+For a dedicated repair/install pass, `setup_gpu_windows.bat` remains available.
 
 ### Port 7860 is already in use
-Run:
+On Windows, run:
 
-```bash
-python webapp.py --port 7861
+```bat
+.runtime\python\python.exe launch.py --port 7861
 ```
+
+On macOS/Linux, run `python webapp.py --port 7861` from the activated environment.
 
 ### I want absolutely no browser UI
 Use `cli.py`; the transcription engine and outputs are the same.
