@@ -2,16 +2,15 @@
 
 A simple **local-first MP4/audio transcription app** built around [Faster-Whisper](https://github.com/SYSTRAN/faster-whisper) / CTranslate2.
 
-It is designed for long lecture recordings and preserves the evidence trail:
+It is designed for long lecture recordings and produces ready-to-use SRT subtitles:
 
 - originals are never modified;
-- source SHA-256 is recorded;
+- source SHA-256 keeps output folders distinct;
 - VAD + word timestamps are enabled;
 - optional technical glossary/hotwords;
 - NVIDIA CUDA is used when available, with automatic CPU fallback;
 - batch upload from the local UI;
-- raw ASR stays separate from any later correction;
-- outputs include SRT, TXT, Markdown, raw JSON, a low-confidence review queue, and a manifest.
+- each recording produces only an SRT named after the original recording.
 
 The app is **fully local at transcription time**. The first time you choose a model, Faster-Whisper downloads the model weights from Hugging Face. Once those weights are cached, the same model can be used offline.
 
@@ -50,29 +49,20 @@ On minimal Linux desktops, Tk is **not** required because the UI runs in your no
    `MME3252, Wheatstone bridge, transducer, op-amp, instrumentation amplifier, DS18B20`
 
 5. Click **Start local transcription**.
-6. Download the ZIP when complete.
+6. Download each SRT directly when transcription completes.
 
 The local server binds only to `127.0.0.1` by default, so it is not exposed to other devices on your network.
 
 ## 3. Outputs
 
-Each recording gets its own folder named with the source stem + first 10 characters of its SHA-256 hash:
+Each recording gets one SRT with the exact original basename and an `.srt` extension. For example, `My lecture (part 1).mp4` becomes `My lecture (part 1).srt`. Output folders remain distinct using the source stem and the first 10 characters of its SHA-256 hash:
 
 ```text
 recording-name-abc123def4/
-  transcript.srt
-  transcript.txt
-  transcript.md
-  raw_transcript.json
-  review_queue.csv
-  manifest.json
+  recording-name.srt
 ```
 
-### Why both raw JSON and text?
-
-`raw_transcript.json` is the evidence-preserving ASR output with timestamps, word probabilities, and segment diagnostics. `transcript.txt` is just the convenient plain-text view. If you later correct ASR mistakes, keep the corrected transcript as a **new derivative** rather than overwriting the raw evidence.
-
-`review_queue.csv` automatically flags segments with suspicious confidence/compression/no-speech signals. Those flags are triage hints, not proof that a line is wrong.
+For multiple recordings, the browser shows one download link per SRT. The CLI writes the same SRT files into their output folders. Existing files from older runs are left in place.
 
 ## 4. Command-line mode for huge folders
 
@@ -106,7 +96,7 @@ Useful options:
 
 Faster-Whisper itself is installed by the setup script. GPU acceleration additionally requires the NVIDIA runtime libraries expected by the installed CTranslate2 version. Current Faster-Whisper documentation specifies **CUDA 12 cuBLAS + cuDNN 9** for the latest CTranslate2 builds.
 
-The app does not make GPU support mandatory: if Auto mode cannot start CUDA, it retries on CPU `int8` and records the fallback reason in `manifest.json`.
+The app does not make GPU support mandatory: if Auto mode cannot start CUDA, it retries on CPU `int8`.
 
 If you already have a working Faster-Whisper/CUDA environment, this app should use it automatically.
 
@@ -120,13 +110,11 @@ If you already have a working Faster-Whisper/CUDA environment, this app should u
 
 ## 7. Brain-compatible reliability choices
 
-This repo intentionally follows the lecture-ingestion workflow used for technical classes:
+This repo follows a simple lecture-ingestion workflow:
 
 - preserve source media;
-- hash before processing;
-- keep timestamped raw evidence immutable;
 - use VAD, word timestamps, and technical hotwords;
-- create a review queue rather than pretending ASR is perfect;
+- provide an SRT named after each recording;
 - treat the original recording as the authoritative source for equations, units, assessment rules, and visually dependent explanations.
 
 ## Troubleshooting

@@ -26,7 +26,8 @@
     .progress > div { height: 100%; width: 0%; background: #dce7f8; transition: width .2s ease; }
     .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 9px; }
     pre { white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; background: #080d14; border: 1px solid #222e40; padding: 12px; border-radius: 10px; color: #bfc9d7; font-size: 12px; }
-    .download { display: none; margin-top: 15px; text-decoration: none; background: #8ff0bd; color: #082116; font-weight: 800; padding: 11px 15px; border-radius: 11px; width: fit-content; }
+    .downloads { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 15px; }
+    .download { text-decoration: none; background: #8ff0bd; color: #082116; font-weight: 800; padding: 11px 15px; border-radius: 11px; }
     .foot { margin-top: 20px; color: #75839a; font-size: 13px; line-height: 1.5; }
     @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } .wrap { padding-top: 28px; } }
   </style>
@@ -36,7 +37,7 @@
     <section class="hero">
       <div class="badge">LOCAL • PRIVATE • NO API KEY</div>
       <h1>WhisperFlow Local</h1>
-      <p>Turn lecture MP4s into timestamped evidence files using Faster‑Whisper on your own machine. Originals are never modified. The first use downloads the selected model; after that, transcription can run offline.</p>
+      <p>Turn lecture MP4s into SRT subtitles using Faster‑Whisper on your own machine. Originals are never modified. The first use downloads the selected model; after that, transcription can run offline.</p>
     </section>
 
     <section class="card">
@@ -89,13 +90,13 @@
       <div class="status" id="status">
         <div class="progress"><div id="bar"></div></div>
         <div class="row"><strong id="message">Preparing…</strong><span id="percent">0%</span></div>
-        <a class="download" id="download" href="#">Download transcript package</a>
+        <div class="downloads" id="downloads"></div>
         <pre id="log"></pre>
       </div>
     </section>
 
     <div class="foot">
-      Output package per recording: <code>transcript.srt</code>, <code>transcript.txt</code>, <code>transcript.md</code>, <code>raw_transcript.json</code>, <code>review_queue.csv</code>, and <code>manifest.json</code>. Raw ASR stays separate from later corrections so evidence remains traceable.
+      Each recording produces one SRT file with the same basename as the original, such as <code>Lab_Video_4.1.mp4</code> → <code>Lab_Video_4.1.srt</code>.
     </div>
   </main>
 
@@ -108,7 +109,7 @@ const bar = document.getElementById('bar');
 const message = document.getElementById('message');
 const percent = document.getElementById('percent');
 const start = document.getElementById('start');
-const download = document.getElementById('download');
+const downloads = document.getElementById('downloads');
 const log = document.getElementById('log');
 const glossary = document.getElementById('glossary');
 
@@ -123,7 +124,7 @@ form.addEventListener('submit', async (event) => {
   if (!files.files.length) return;
   const data = new FormData(form);
   start.disabled = true;
-  download.style.display = 'none';
+  downloads.replaceChildren();
   statusBox.style.display = 'block';
   message.textContent = 'Uploading to the local process…';
   bar.style.width = '1%';
@@ -152,8 +153,14 @@ async function poll(jobId) {
     log.scrollTop = log.scrollHeight;
 
     if (job.status === 'done') {
-      download.href = job.download;
-      download.style.display = 'inline-block';
+      for (const item of job.downloads || []) {
+        const link = document.createElement('a');
+        link.className = 'download';
+        link.href = item.url;
+        link.download = item.name;
+        link.textContent = `Download ${item.name}`;
+        downloads.appendChild(link);
+      }
       start.disabled = false;
       return;
     }

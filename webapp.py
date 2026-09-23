@@ -8,14 +8,12 @@ import threading
 import traceback
 import uuid
 import webbrowser
-import zipfile
 from pathlib import Path
 from time import sleep
 
 from flask import Flask, jsonify, render_template, request, send_file
-from werkzeug.utils import secure_filename
 
-from transcriber import LocalWhisperTranscriber, PRESETS
+from transcriber import LocalWhisperTranscriber, MEDIA_EXTENSIONS, PRESETS
 
 BASE_DIR = Path(__file__).resolve().parent
 WORKSPACE = BASE_DIR / "workspace"
@@ -26,8 +24,12 @@ app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = None
 
 jobs: dict[str, dict] = {}
+download_paths: dict[str, list[Path]] = {}
 jobs_lock = threading.Lock()
 gpu_slot = threading.Semaphore(1)
+WINDOWS_DEVICE_NAMES = {"CON", "PRN", "AUX", "NUL"} | {
+    f"{prefix}{number}" for prefix in ("COM", "LPT") for number in range(1, 10)
+}
 
 
 def update_job(job_id: str, **values) -> None:
@@ -39,13 +41,6 @@ def append_log(job_id: str, message: str) -> None:
     with jobs_lock:
         jobs[job_id].setdefault("log", []).append(message)
         jobs[job_id]["log"] = jobs[job_id]["log"][-200:]
-
-
-def zip_directory(source: Path, destination: Path) -> None:
-    with zipfile.ZipFile(destination, "w", compression=zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
-        for path in source.rglob("*"):
-            if path.is_file():
-                zf.write(path, path.relative_to(source))
 
 
 def run_job(job_id: str, input_files: list[Path], preset: str, device: str, language: str, glossary: str) -> None:
@@ -64,6 +59,7 @@ def run_job(job_id: str, input_files: list[Path], preset: str, device: str, lang
                 log=lambda msg: append_log(job_id, msg),
             )
             total = len(input_files)
+            completed: list[Path] = []
             for index, source in enumerate(input_files):
                 base = index / total
                 span = 1 / total
@@ -72,17 +68,19 @@ def run_job(job_id: str, input_files: list[Path], preset: str, device: str, lang
                     overall = min(0.99, base + frac * span)
                     update_job(job_id, progress=overall, message=msg)
 
-                tx.transcribe_one(source, output_dir, progress=on_progress)
+                completed.append(tx.transcribe_one(source, output_dir, progress=on_progress))
 
-            zip_path = job_dir / "whisperflow-transcripts.zip"
-            zip_directory(output_dir, zip_path)
-            update_job(
-                job_id,
-                status="done",
-                progress=1.0,
-                message="Transcription complete",
-                download=f"/download/{job_id}",
-            )
+            with jobs_lock:
+                download_paths[job_id] = completed
+                jobs[job_id].update(
+                    status="done",
+                    progress=1.0,
+                    message="Transcription complete",
+                    downloads=[
+                        {"name": path.name, "url": f"/download/{job_id}/{index}"}
+                        for index, path in enumerate(completed)
+                    ],
+                )
     except Exception as exc:
         append_log(job_id, traceback.format_exc())
         update_job(job_id, status="error", message=str(exc), error=str(exc))
@@ -114,19 +112,23 @@ def create_job():
     input_dir.mkdir(parents=True, exist_ok=True)
 
     saved: list[Path] = []
-    used_names: set[str] = set()
     for upload in uploads:
         if not upload.filename:
             continue
-        name = secure_filename(Path(upload.filename).name) or "recording.mp4"
-        stem, suffix = Path(name).stem, Path(name).suffix
-        candidate = name
-        counter = 2
-        while candidate.lower() in used_names:
-            candidate = f"{stem}-{counter}{suffix}"
-            counter += 1
-        used_names.add(candidate.lower())
-        destination = input_dir / candidate
+        name = Path(upload.filename.replace("\\", "/")).name
+        invalid = (
+            not name
+            or name in {".", ".."}
+            or any(ord(char) < 32 or char in '<>:"/\\|?*' for char in name)
+            or name.rstrip(" .") != name
+            or name.split(".")[0].upper() in WINDOWS_DEVICE_NAMES
+            or Path(name).suffix.lower() not in MEDIA_EXTENSIONS
+        )
+        if invalid:
+            shutil.rmtree(job_dir, ignore_errors=True)
+            return jsonify({"error": f"Invalid recording filename: {name}"}), 400
+        destination = input_dir / str(len(saved) + 1) / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
         upload.save(destination)
         saved.append(destination)
 
@@ -162,12 +164,17 @@ def get_job(job_id: str):
         return jsonify(job)
 
 
-@app.get("/download/<job_id>")
-def download_job(job_id: str):
-    zip_path = JOBS_DIR / job_id / "whisperflow-transcripts.zip"
-    if not zip_path.exists():
-        return jsonify({"error": "Output is not ready."}), 404
-    return send_file(zip_path, as_attachment=True, download_name="whisperflow-transcripts.zip")
+@app.get("/download/<job_id>/<int:index>")
+def download_job(job_id: str, index: int):
+    with jobs_lock:
+        job = jobs.get(job_id)
+        paths = download_paths.get(job_id, [])
+        if not job or job["status"] != "done" or index >= len(paths):
+            return jsonify({"error": "SRT is not ready."}), 404
+        path = paths[index]
+    if not path.is_file() or path.suffix.lower() != ".srt":
+        return jsonify({"error": "SRT is not available."}), 404
+    return send_file(path, as_attachment=True, download_name=path.name, mimetype="application/x-subrip")
 
 
 def main() -> None:

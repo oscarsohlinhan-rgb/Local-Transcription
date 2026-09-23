@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-import csv
 import hashlib
-import json
 import os
 import platform
-import shutil
 import socket
 import sys
-import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -153,45 +149,15 @@ def segment_to_dict(segment) -> dict:
     }
 
 
-def review_flags(segment: dict) -> list[str]:
-    flags: list[str] = []
-    avg_logprob = segment.get("avg_logprob")
-    compression_ratio = segment.get("compression_ratio")
-    no_speech_prob = segment.get("no_speech_prob")
-    text = (segment.get("text") or "").strip()
-
-    if avg_logprob is not None and avg_logprob < -0.75:
-        flags.append("low_log_probability")
-    if compression_ratio is not None and compression_ratio > 2.4:
-        flags.append("high_compression_ratio")
-    if no_speech_prob is not None and no_speech_prob > 0.60 and text:
-        flags.append("high_no_speech_probability")
-    if not text:
-        flags.append("empty_text")
-    return flags
-
-
 def write_outputs(
     output_dir: Path,
     manifest: dict,
     segments: list[dict],
     info: dict,
-) -> None:
+) -> Path:
     output_dir.mkdir(parents=True, exist_ok=True)
-
-    raw_payload = {
-        "manifest": manifest,
-        "transcription_info": info,
-        "segments": segments,
-    }
-    (output_dir / "raw_transcript.json").write_text(
-        json.dumps(raw_payload, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
-
-    plain = "\n".join(s["text"] for s in segments if s["text"]).strip() + "\n"
-    (output_dir / "transcript.txt").write_text(plain, encoding="utf-8")
-
-    with (output_dir / "transcript.srt").open("w", encoding="utf-8") as f:
+    srt_path = output_dir / f"{Path(manifest['source']['source_name']).stem}.srt"
+    with srt_path.open("w", encoding="utf-8") as f:
         index = 1
         for seg in segments:
             if not seg["text"]:
@@ -200,64 +166,7 @@ def write_outputs(
             f.write(f"{format_clock(seg['start'], True)} --> {format_clock(seg['end'], True)}\n")
             f.write(seg["text"] + "\n\n")
             index += 1
-
-    md_lines = [
-        f"# Transcript — {manifest['source']['source_name']}",
-        "",
-        "> Raw ASR evidence. Treat timestamps as the route back to the original recording; do not silently rewrite this file.",
-        "",
-        "## Processing metadata",
-        "",
-        f"- SHA-256: `{manifest['source']['sha256']}`",
-        f"- Model: `{manifest['settings']['model']}`",
-        f"- Device: `{manifest['settings']['device']}` / `{manifest['settings']['compute_type']}`",
-        f"- Language: `{info.get('language')}` (probability {info.get('language_probability')})",
-        "",
-        "## Time-aligned transcript",
-        "",
-    ]
-    for seg in segments:
-        if seg["text"]:
-            md_lines.append(
-                f"**[{format_clock(seg['start'])} → {format_clock(seg['end'])}]** {seg['text']}"
-            )
-            md_lines.append("")
-    (output_dir / "transcript.md").write_text("\n".join(md_lines), encoding="utf-8")
-
-    queue_rows = []
-    for seg in segments:
-        flags = review_flags(seg)
-        if flags:
-            queue_rows.append(
-                {
-                    "start": format_clock(seg["start"]),
-                    "end": format_clock(seg["end"]),
-                    "flags": ";".join(flags),
-                    "avg_logprob": seg.get("avg_logprob"),
-                    "compression_ratio": seg.get("compression_ratio"),
-                    "no_speech_prob": seg.get("no_speech_prob"),
-                    "text": seg.get("text", ""),
-                }
-            )
-    with (output_dir / "review_queue.csv").open("w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "start",
-                "end",
-                "flags",
-                "avg_logprob",
-                "compression_ratio",
-                "no_speech_prob",
-                "text",
-            ],
-        )
-        writer.writeheader()
-        writer.writerows(queue_rows)
-
-    (output_dir / "manifest.json").write_text(
-        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-    )
+    return srt_path
 
 
 class LocalWhisperTranscriber:
@@ -433,9 +342,9 @@ class LocalWhisperTranscriber:
                 "note": "Silence/non-speech may be omitted by VAD; use the original recording as the authoritative source.",
             },
         }
-        write_outputs(output_dir, manifest, segments, info)
+        srt_path = write_outputs(output_dir, manifest, segments, info)
         progress(1.0, f"Finished {source_path.name}")
-        return output_dir
+        return srt_path
 
 
 def discover_media(folder: Path, recursive: bool = False) -> list[Path]:

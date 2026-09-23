@@ -19,6 +19,9 @@ if not exist "%CD%\vendor" mkdir "%CD%\vendor"
 if not exist "%PY_EXE%" call :install_python
 if errorlevel 1 goto :fail
 
+call :configure_python_path
+if errorlevel 1 goto :fail
+
 if not exist "%BOOTSTRAP_MARKER%" call :install_dependencies
 if errorlevel 1 goto :fail
 
@@ -71,6 +74,13 @@ if not exist "%GET_PIP%" (
 )
 
 "%PY_EXE%" "%GET_PIP%" --no-warn-script-location
+if errorlevel 1 exit /b 1
+exit /b 0
+
+:configure_python_path
+rem Embedded Python only imports modules from directories listed in python312._pth.
+rem Add the repository root so the UI, CLI, and sitecustomize are importable.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$p='%PY_DIR%\python312._pth'; if (-not (Test-Path -LiteralPath $p)) { throw 'Missing embedded Python path file' }; $lines=@(Get-Content -LiteralPath $p); if ($lines -notcontains '..\..') { $lines += '..\..'; Set-Content -LiteralPath $p -Value $lines -Encoding ASCII }"
 if errorlevel 1 exit /b 1
 exit /b 0
 
